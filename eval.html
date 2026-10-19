@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>교사용 모델 평가 | 비·헹·분·섞! 분리배출 감독 AI</title>
+
+  <!--
+    [라이브러리] index.html과 똑같은 버전을 사용해요.
+    → 같은 모델을 같은 방식으로 실행하므로 학생 화면과 평가 결과가 일치해요.
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.5/dist/teachablemachine-image.min.js"></script>
+
+  <style>
+    :root {
+      --bg: #f4f6f8; --card: #fff; --ink: #1c2530; --muted: #5d6b78; --line: #d9e0e7;
+      --ok: #178a4c; --ok-bg: #e2f5ea; --bad: #d03a2c; --bad-bg: #fde7e4;
+      --warn: #a3660f; --warn-bg: #fff3d4; --blue: #2563eb; --blue-bg: #eaf1ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--ink);
+      font-family: "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+      font-size: 16px; line-height: 1.5;
+    }
+    main { max-width: 1100px; margin: 0 auto; padding: 16px 16px 48px; }
+    h1 { font-size: 24px; margin: 8px 0 2px; }
+    h2 { font-size: 19px; margin: 0 0 10px; }
+    .muted { color: var(--muted); }
+    .small { font-size: 14px; }
+
+    .status { border-radius: 10px; padding: 10px 14px; font-weight: 700; margin: 12px 0; }
+    .status.loading { background: var(--blue-bg); color: var(--blue); }
+    .status.ready { background: var(--ok-bg); color: var(--ok); }
+    .status.error { background: var(--bad-bg); color: var(--bad); font-weight: 600; }
+
+    .panel { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+
+    /* 업로드 영역 */
+    .upload-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .drop {
+      border: 2px dashed #b5c3d1; border-radius: 12px; padding: 18px; text-align: center;
+      color: var(--muted); margin-top: 12px; transition: background .2s;
+    }
+    .drop.over { background: var(--blue-bg); border-color: var(--blue); }
+    select, button { font: inherit; }
+    select { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    .btn {
+      border: none; border-radius: 10px; padding: 10px 16px; font-weight: 700; cursor: pointer;
+      background: var(--blue); color: #fff;
+    }
+    .btn.green { background: var(--ok); }
+    .btn.red { background: var(--bad); }
+    .btn.ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+    .btn.ghost.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+    .btn:disabled { background: #b3bcc5; color: #fff; cursor: not-allowed; border-color: #b3bcc5; }
+
+    /* 지표 */
+    .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .metric { background: #f8fafc; border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+    .metric .label { font-size: 14px; color: var(--muted); }
+    .metric .value { font-size: 26px; font-weight: 800; }
+    .metric .sub { font-size: 13px; color: var(--muted); }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid var(--line); padding: 10px; text-align: center; }
+    th { background: #f1f4f7; font-size: 14px; }
+    td.cm { font-size: 24px; font-weight: 800; }
+    td.cm.correct { background: var(--ok-bg); color: var(--ok); }
+    td.cm.wrong { background: var(--bad-bg); color: var(--bad); }
+
+    /* 사진 카드 목록 */
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .filters { display: flex; flex-wrap: wrap; gap: 6px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+    .item { background: var(--card); border: 2px solid var(--line); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
+    .item.correct { border-color: #9ad5b3; }
+    .item.wrong { border-color: var(--bad); }
+    .item img { width: 100%; height: 160px; object-fit: contain; background: #eef1f4; display: block; }
+    .item .body { padding: 10px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+    .item .name { font-weight: 700; word-break: break-all; }
+    .tag { display: inline-block; border-radius: 999px; padding: 2px 8px; font-weight: 700; font-size: 13px; }
+    .tag.ok { background: var(--ok-bg); color: var(--ok); }
+    .tag.bad { background: var(--bad-bg); color: var(--bad); }
+    .tag.warn { background: var(--warn-bg); color: var(--warn); }
+    .tag.info { background: var(--blue-bg); color: var(--blue); }
+    .mini-bar { height: 8px; background: #e8edf1; border-radius: 4px; overflow: hidden; }
+    .mini-bar div { height: 100%; }
+    .empty { text-align: center; color: var(--muted); padding: 30px 10px; }
+
+    @media (max-width: 720px) { .two-col { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>🧪 교사용 모델 평가</h1>
+  <div class="muted">비·헹·분·섞! 분리배출 감독 AI · PET병 라벨 분리 여부 분류 모델 성능 확인</div>
+
+  <div id="status" class="status loading">🔄 AI 모델을 불러오는 중입니다...</div>
+
+  <!-- ① 평가 사진 올리기 -->
+  <section class="panel">
+    <h2>① 평가 사진 올리기</h2>
+    <div class="upload-row">
+      <label for="defaultTruth">이번에 올릴 사진의 정답:</label>
+      <select id="defaultTruth">
+        <option value="">미지정 (사진마다 따로 지정)</option>
+        <option value="PET_Label_Removed">라벨 제거 (PET_Label_Removed)</option>
+        <option value="PET_Label_Attached">라벨 부착 (PET_Label_Attached)</option>
+      </select>
+      <button id="pickBtn" class="btn">🖼️ 사진 여러 장 선택</button>
+      <input type="file" id="fileInput" accept="image/*" multiple hidden>
+    </div>
+    <div id="drop" class="drop">여기로 사진을 끌어다 놓아도 됩니다.</div>
+    <p class="small muted" style="margin-bottom:0">
+      💡 정답이 같은 사진끼리 묶어서 올리면 편리합니다. 올린 뒤에도 각 사진 카드에서 정답을 바꿀 수 있습니다.<br>
+      🔒 사진과 평가 결과는 이 브라우저 안에서만 처리되며 외부로 전송·저장되지 않습니다. 새로고침하면 사라집니다.
+    </p>
+  </section>
+
+  <!-- ② 평가 결과 요약 -->
+  <section class="panel">
+    <h2>② 평가 결과</h2>
+    <div class="metrics">
+      <div class="metric"><div class="label">정확도 (Accuracy)</div><div class="value" id="mAcc">-</div><div class="sub" id="mAccSub">평가 가능 0장</div></div>
+      <div class="metric"><div class="label">라벨 제거 정분류율</div><div class="value" id="mRecRemoved">-</div><div class="sub" id="mRecRemovedSub">-</div></div>
+      <div class="metric"><div class="label">라벨 부착 정분류율</div><div class="value" id="mRecAttached">-</div><div class="sub" id="mRecAttachedSub">-</div></div>
+      <div class="metric"><div class="label">불확실 판정 (최대 확률 &lt; 70%)</div><div class="value" id="mUnsure">-</div><div class="sub">학생 화면에서 “잘 모르겠어요”로 표시</div></div>
+    </div>
+
+    <div class="two-col">
+      <div>
+        <h2 style="font-size:16px">2×2 혼동행렬 <span class="small muted">(행: 실제 정답 / 열: AI 예측)</span></h2>
+        <table>
+          <thead>
+            <tr><th>실제 \ 예측</th><th>라벨 제거</th><th>라벨 부착</th><th>합계</th></tr>
+          </thead>
+          <tbody>
+            <tr><th>라벨 제거</th><td class="cm correct" id="cm_RR">0</td><td class="cm wrong" id="cm_RA">0</td><td id="cm_Rsum">0</td></tr>
+            <tr><th>라벨 부착</th><td class="cm wrong" id="cm_AR">0</td><td class="cm correct" id="cm_AA">0</td><td id="cm_Asum">0</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="small muted">
+        <h2 style="font-size:16px;color:var(--ink)">지표 읽는 법</h2>
+        <ul style="padding-left:18px;margin:0">
+          <li><b>정확도</b> = 맞힌 사진 수 ÷ 정답이 지정된 전체 사진 수</li>
+          <li><b>클래스별 정분류율</b> = 그 클래스 사진 중 AI가 맞힌 비율 (재현율)</li>
+          <li>초록 칸은 맞힌 수, 빨간 칸은 틀린 수입니다.</li>
+          <li>예측은 두 확률 중 더 큰 쪽을 기준으로 합니다. 불확실 판정 수는 따로 셉니다.</li>
+          <li>정답 미지정·오류 사진은 계산에서 제외됩니다.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ③ 사진별 결과 -->
+  <section class="panel">
+    <div class="toolbar">
+      <h2 style="margin:0">③ 사진별 결과 <span class="small muted" id="countInfo"></span></h2>
+      <div class="filters">
+        <button class="btn ghost active" data-filter="all">전체</button>
+        <button class="btn ghost" data-filter="wrong">❌ 틀린 사진만</button>
+        <button class="btn ghost" data-filter="unsure">❓ 불확실</button>
+        <button class="btn ghost" data-filter="nolabel">정답 미지정</button>
+        <button class="btn ghost" data-filter="error">오류</button>
+      </div>
+    </div>
+    <div class="upload-row" style="margin-bottom:12px">
+      <button id="csvBtn" class="btn green">⬇️ CSV 다운로드</button>
+      <button id="resetBtn" class="btn red">🗑️ 평가 초기화</button>
+      <span id="progress" class="small muted"></span>
+    </div>
+    <div id="grid" class="grid"></div>
+  </section>
+</main>
+
+<script>
+/* =============================================================
+   1. 기본 설정값 (index.html과 완전히 같아야 해요)
+   ============================================================= */
+const MODEL_URL = "./model.json";
+const METADATA_URL = "./metadata.json";
+const CLASS_REMOVED = "PET_Label_Removed";
+const CLASS_ATTACHED = "PET_Label_Attached";
+const THRESHOLD = 0.7;
+
+// 화면에 보여 줄 한국어 이름
+const KOR = {
+  [CLASS_REMOVED]: "라벨 제거",
+  [CLASS_ATTACHED]: "라벨 부착"
+};
+
+/* =============================================================
+   2. 상태 변수
+   - items: 올린 사진 하나하나의 정보를 담는 목록
+     { id, name, url, truth, pred, pRemoved, pAttached, state, error }
+     state: "wait"(대기) / "done"(완료) / "error"(오류)
+   ============================================================= */
+let model = null;
+let modelReady = false;
+let items = [];
+let nextId = 1;
+let processing = false;   // 지금 예측을 돌리는 중인지
+let filter = "all";       // 현재 보기 필터
+
+const $ = (id) => document.getElementById(id);
+
+function setStatus(type, html) {
+  const el = $("status");
+  el.className = "status " + type;
+  el.innerHTML = html;
+}
+
+/* =============================================================
+   3. 모델 불러오기 (index.html과 같은 모델, 같은 방식)
+   ============================================================= */
+async function loadModel() {
+  try {
+    if (typeof tmImage === "undefined" || typeof tf === "undefined") throw new Error("LIBRARY");
+    if (location.protocol === "file:") throw new Error("FILE_PROTOCOL");
+
+    model = await tmImage.load(MODEL_URL, METADATA_URL);
+
+    const labels = model.getClassLabels();
+    if (!labels.includes(CLASS_REMOVED) || !labels.includes(CLASS_ATTACHED)) {
+      throw new Error("LABEL:" + labels.join(", "));
+    }
+    if (labels.length !== 2) {
+      console.warn("클래스가 2개가 아닙니다:", labels);
+    }
+
+    // 준비 운동
+    const warm = document.createElement("canvas");
+    warm.width = warm.height = 224;
+    await model.predict(warm);
+
+    modelReady = true;
+    setStatus("ready", "✅ 모델 준비 완료 · 클래스: " + labels.join(", "));
+    processQueue(); // 모델이 준비되기 전에 올린 사진이 있으면 이제 예측
+  } catch (err) {
+    console.error(err);
+    let msg = "❌ 모델을 불러오지 못했습니다. ";
+    if (err.message === "LIBRARY") msg += "인터넷 연결(CDN)을 확인하고 새로고침하세요.";
+    else if (err.message === "FILE_PROTOCOL") msg += "파일을 직접 열면(file://) 모델을 읽을 수 없습니다. GitHub Pages 주소나 로컬 서버(Live Server 등)로 여세요.";
+    else if (err.message.startsWith("LABEL:")) msg += "클래스 이름이 다릅니다. 현재: " + err.message.slice(6) + " / 필요: " + CLASS_REMOVED + ", " + CLASS_ATTACHED;
+    else msg += "model.json, metadata.json, weights.bin이 eval.html과 같은 폴더에 있는지 확인하세요.";
+    setStatus("error", msg + "<br><span class='small'>사진은 올려 둘 수 있지만, 모델이 준비되기 전에는 예측하지 않습니다.</span>");
+  }
+}
+
+/* =============================================================
+   4. 사진 추가하기
+   ============================================================= */
+$("pickBtn").addEventListener("click", () => $("fileInput").click());
+$("fileInput").addEventListener("change", (e) => {
+  addFiles(e.target.files);
+  e.target.value = "";
+});
+
+// 끌어다 놓기
+const drop = $("drop");
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => addFiles(e.dataTransfer.files));
+
+function addFiles(fileList) {
+  const truth = $("defaultTruth").value;
+  let skipped = 0;
+  for (const file of fileList) {
+    // 사진이 아닌 파일은 건너뛰기
+    if (!file.type.startsWith("image/")) { skipped++; continue; }
+    items.push({
+      id: nextId++,
+      name: file.name,
+      file: file,                       // 예측이 끝나면 지워요(메모리 절약)
+      url: URL.createObjectURL(file),   // 기기 안에서만 쓰는 임시 주소
+      truth: truth,
+      pred: null, pRemoved: null, pAttached: null,
+      state: "wait", error: ""
+    });
+  }
+  if (skipped > 0) alert(skipped + "개의 파일은 사진이 아니어서 제외했습니다.");
+  render();
+  processQueue();
+}
+
+/* =============================================================
+   5. 예측 대기열 처리
+   - 사진을 한 장씩 차례로 예측해요. (여러 장을 동시에 돌리면 느려지고 멈출 수 있어요)
+   - 모델이 준비되지 않았으면 기다려요.
+   ============================================================= */
+async function processQueue() {
+  if (processing || !modelReady) return;
+  processing = true;
+  try {
+    let item;
+    while ((item = items.find(it => it.state === "wait"))) {
+      const doneCount = items.filter(it => it.state !== "wait").length;
+      $("progress").textContent = `🔄 예측 중... (${doneCount + 1}/${items.length})`;
+      await predictItem(item);
+      render();
+    }
+  } finally {
+    processing = false;
+    $("progress").textContent = "";
+  }
+}
+
+// 사진 → <img>
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("IMAGE"));
+    img.src = url;
+  });
+}
+
+// index.html과 똑같은 방식으로 크기를 맞춰요. (결과 일치)
+function toCanvas(source, srcW, srcH, maxSide = 800) {
+  const scale = Math.min(1, maxSide / Math.max(srcW, srcH));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(srcW * scale);
+  canvas.height = Math.round(srcH * scale);
+  canvas.getContext("2d").drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+async function predictItem(item) {
+  try {
+    const img = await loadImage(item.url);
+    const canvas = toCanvas(img, img.naturalWidth, img.naturalHeight);
+    const preds = await model.predict(canvas);
+    item.pRemoved = preds.find(p => p.className === CLASS_REMOVED).probability;
+    item.pAttached = preds.find(p => p.className === CLASS_ATTACHED).probability;
+    // 예측 클래스 = 두 확률 중 더 큰 쪽
+    item.pred = item.pAttached > item.pRemoved ? CLASS_ATTACHED : CLASS_REMOVED;
+    item.state = "done";
+  } catch (err) {
+    console.error(item.name, err);
+    item.state = "error";
+    item.error = err.message === "IMAGE"
+      ? "이미지를 열 수 없음 (HEIC 등 지원되지 않는 형식이거나 손상된 파일)"
+      : "예측 중 오류 발생";
+  } finally {
+    item.file = null;
+  }
+}
+
+/* =============================================================
+   6. 지표 계산 (정확도, 혼동행렬, 클래스별 정분류율)
+   ============================================================= */
+function isUnsure(it) {
+  return it.state === "done" && Math.max(it.pRemoved, it.pAttached) < THRESHOLD;
+}
+function isCorrect(it) {
+  return it.state === "done" && it.truth !== "" && it.truth === it.pred;
+}
+function isWrong(it) {
+  return it.state === "done" && it.truth !== "" && it.truth !== it.pred;
+}
+
+function computeMetrics() {
+  // 평가 가능한 사진: 예측 완료 + 정답 지정
+  const evalItems = items.filter(it => it.state === "done" && it.truth !== "");
+  const cm = { RR: 0, RA: 0, AR: 0, AA: 0 }; // 첫 글자=실제, 둘째 글자=예측
+  for (const it of evalItems) {
+    const t = it.truth === CLASS_REMOVED ? "R" : "A";
+    const p = it.pred === CLASS_REMOVED ? "R" : "A";
+    cm[t + p]++;
+  }
+  const total = evalItems.length;
+  const correct = cm.RR + cm.AA;
+  const rSum = cm.RR + cm.RA;
+  const aSum = cm.AR + cm.AA;
+  return {
+    total, correct, cm, rSum, aSum,
+    acc: total ? correct / total : null,
+    recR: rSum ? cm.RR / rSum : null,
+    recA: aSum ? cm.AA / aSum : null,
+    unsure: evalItems.filter(isUnsure).length
+  };
+}
+
+const pct = (v) => v === null ? "-" : (v * 100).toFixed(1) + "%";
+
+/* =============================================================
+   7. 화면 그리기
+   ============================================================= */
+function render() {
+  // --- 지표 ---
+  const m = computeMetrics();
+  $("mAcc").textContent = pct(m.acc);
+  $("mAccSub").textContent = `평가 가능 ${m.total}장 중 ${m.correct}장 정답`;
+  $("mRecRemoved").textContent = pct(m.recR);
+  $("mRecRemovedSub").textContent = `${m.cm.RR} / ${m.rSum}장`;
+  $("mRecAttached").textContent = pct(m.recA);
+  $("mRecAttachedSub").textContent = `${m.cm.AA} / ${m.aSum}장`;
+  $("mUnsure").textContent = m.total ? `${m.unsure}장` : "-";
+  $("cm_RR").textContent = m.cm.RR;
+  $("cm_RA").textContent = m.cm.RA;
+  $("cm_AR").textContent = m.cm.AR;
+  $("cm_AA").textContent = m.cm.AA;
+  $("cm_Rsum").textContent = m.rSum;
+  $("cm_Asum").textContent = m.aSum;
+
+  // --- 사진 카드 ---
+  const grid = $("grid");
+  grid.innerHTML = "";
+  const shown = items.filter(it => {
+    if (filter === "wrong") return isWrong(it);
+    if (filter === "unsure") return isUnsure(it);
+    if (filter === "nolabel") return it.truth === "";
+    if (filter === "error") return it.state === "error";
+    return true;
+  });
+  $("countInfo").textContent = `(${shown.length} / 전체 ${items.length}장)`;
+
+  if (shown.length === 0) {
+    const msg = items.length === 0 ? "아직 올린 사진이 없습니다." : "이 조건에 해당하는 사진이 없습니다.";
+    grid.innerHTML = `<div class="empty" style="grid-column:1/-1">${msg}</div>`;
+    return;
+  }
+  for (const it of shown) grid.appendChild(makeCard(it));
+}
+
+// 사진 카드 하나 만들기 (파일 이름은 textContent로 넣어 안전하게)
+function makeCard(it) {
+  const card = document.createElement("div");
+  card.className = "item" + (isCorrect(it) ? " correct" : isWrong(it) ? " wrong" : "");
+
+  const img = document.createElement("img");
+  img.src = it.url;
+  img.alt = it.name;
+  card.appendChild(img);
+
+  const body = document.createElement("div");
+  body.className = "body";
+
+  const name = document.createElement("div");
+  name.className = "name";
+  name.textContent = `#${it.id} ${it.name}`;
+  body.appendChild(name);
+
+  // 정답 선택 상자
+  const row = document.createElement("label");
+  row.textContent = "정답: ";
+  const sel = document.createElement("select");
+  sel.innerHTML = `
+    <option value="">미지정</option>
+    <option value="${CLASS_REMOVED}">라벨 제거</option>
+    <option value="${CLASS_ATTACHED}">라벨 부착</option>`;
+  sel.value = it.truth;
+  sel.addEventListener("change", () => { it.truth = sel.value; render(); });
+  row.appendChild(sel);
+  body.appendChild(row);
+
+  // 상태별 내용
+  if (it.state === "wait") {
+    body.insertAdjacentHTML("beforeend", `<span class="tag info">${modelReady ? "예측 대기 중..." : "모델 로딩 대기 중..."}</span>`);
+  } else if (it.state === "error") {
+    const t = document.createElement("span");
+    t.className = "tag bad";
+    t.textContent = "⚠️ " + it.error;
+    body.appendChild(t);
+  } else {
+    body.insertAdjacentHTML("beforeend", `
+      <div>예측: <b>${KOR[it.pred]}</b></div>
+      <div>라벨 제거 ${pct(it.pRemoved)}</div>
+      <div class="mini-bar"><div style="width:${it.pRemoved * 100}%;background:var(--ok)"></div></div>
+      <div>라벨 부착 ${pct(it.pAttached)}</div>
+      <div class="mini-bar"><div style="width:${it.pAttached * 100}%;background:var(--bad)"></div></div>`);
+    let tags = "";
+    if (it.truth === "") tags += `<span class="tag info">정답 미지정</span> `;
+    else if (isCorrect(it)) tags += `<span class="tag ok">✅ 정답</span> `;
+    else tags += `<span class="tag bad">❌ 오답</span> `;
+    if (isUnsure(it)) tags += `<span class="tag warn">❓ 불확실</span>`;
+    body.insertAdjacentHTML("beforeend", `<div>${tags}</div>`);
+  }
+  card.appendChild(body);
+  return card;
+}
+
+// 필터 버튼
+document.querySelectorAll("[data-filter]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    filter = btn.dataset.filter;
+    document.querySelectorAll("[data-filter]").forEach(b => b.classList.toggle("active", b === btn));
+    render();
+  });
+});
+
+/* =============================================================
+   8. CSV 다운로드
+   - 파일은 브라우저 안에서 만들어져 내 컴퓨터에 바로 저장돼요. (서버 전송 없음)
+   - 엑셀에서 한글이 깨지지 않도록 맨 앞에 BOM(\uFEFF)을 붙였어요.
+   ============================================================= */
+function csvCell(v) {
+  const s = v === null || v === undefined ? "" : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+$("csvBtn").addEventListener("click", () => {
+  if (items.length === 0) { alert("다운로드할 평가 결과가 없습니다."); return; }
+
+  const rows = [["번호", "파일명", "실제정답", "AI예측", "P_라벨제거", "P_라벨부착", "최대확률", "채점", "불확실(<0.7)", "학생화면표시", "오류"]];
+  for (const it of items) {
+    let grade = "";
+    if (it.state === "error") grade = "오류";
+    else if (it.state === "wait") grade = "대기";
+    else if (it.truth === "") grade = "정답미지정";
+    else grade = isCorrect(it) ? "정답" : "오답";
+
+    let student = "";
+    if (it.state === "done") {
+      student = isUnsure(it) ? "잘 모르겠어요" : (it.pred === CLASS_ATTACHED ? "라벨을 분리하세요!" : "라벨을 잘 분리했어요!");
+    }
+    const maxP = it.state === "done" ? Math.max(it.pRemoved, it.pAttached) : null;
+    rows.push([
+      it.id, it.name,
+      it.truth || "", it.pred || "",
+      it.pRemoved === null ? "" : it.pRemoved.toFixed(4),
+      it.pAttached === null ? "" : it.pAttached.toFixed(4),
+      maxP === null ? "" : maxP.toFixed(4),
+      grade, isUnsure(it) ? "예" : (it.state === "done" ? "아니오" : ""),
+      student, it.error
+    ]);
+  }
+
+  // 요약 지표도 아래에 붙이기
+  const m = computeMetrics();
+  rows.push([]);
+  rows.push(["[요약]"]);
+  rows.push(["평가 가능 사진 수", m.total]);
+  rows.push(["정확도", pct(m.acc)]);
+  rows.push(["라벨 제거 정분류율", pct(m.recR), `${m.cm.RR}/${m.rSum}`]);
+  rows.push(["라벨 부착 정분류율", pct(m.recA), `${m.cm.AA}/${m.aSum}`]);
+  rows.push(["불확실 판정 수", m.unsure]);
+  rows.push([]);
+  rows.push(["[혼동행렬] 실제\\예측", "라벨 제거", "라벨 부착"]);
+  rows.push(["라벨 제거", m.cm.RR, m.cm.RA]);
+  rows.push(["라벨 부착", m.cm.AR, m.cm.AA]);
+
+  const csv = "\uFEFF" + rows.map(r => r.map(csvCell).join(",")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const d = new Date();
+  const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}_${String(d.getHours()).padStart(2, "0")}${String(d.getMinutes()).padStart(2, "0")}`;
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `PET라벨_평가결과_${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
+/* =============================================================
+   9. 평가 초기화
+   ============================================================= */
+$("resetBtn").addEventListener("click", () => {
+  if (items.length === 0) return;
+  if (!confirm("올린 사진과 평가 결과를 모두 지울까요?\n(CSV를 먼저 내려받았는지 확인하세요)")) return;
+  // 예측 중이던 사진이 있어도 목록에서 빠지므로 결과에 반영되지 않아요.
+  items.forEach(it => URL.revokeObjectURL(it.url)); // 임시 주소 정리(메모리 비우기)
+  items = [];
+  filter = "all";
+  document.querySelectorAll("[data-filter]").forEach(b => b.classList.toggle("active", b.dataset.filter === "all"));
+  render();
+});
+
+/* =============================================================
+   10. 시작
+   ============================================================= */
+render();
+loadModel();
+</script>
+</body>
+</html>

@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>비·헹·분·섞! 분리배출 감독 AI</title>
+
+  <!--
+    ===========================================================
+    [라이브러리 불러오기]
+    - TensorFlow.js : 브라우저 안에서 인공지능을 실행하는 라이브러리
+    - Teachable Machine Image : 티처블 머신으로 만든 이미지 모델을 쉽게 쓰게 해 주는 라이브러리
+    두 버전은 서로 잘 맞는 조합으로 고정했습니다. (eval.html과 같은 버전)
+    ※ 이 라이브러리들은 '코드 파일'만 내려받을 뿐,
+      사진이나 결과를 어디에도 보내지 않습니다.
+    ===========================================================
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.5/dist/teachablemachine-image.min.js"></script>
+
+  <style>
+    /* ===== 색상과 기본 글꼴 설정 ===== */
+    :root {
+      --bg: #f2f8f4;
+      --card: #ffffff;
+      --ink: #1d2a23;
+      --muted: #5a6b61;
+      --line: #d5e3da;
+      --ok: #189151;
+      --ok-bg: #e2f5ea;
+      --bad: #d6392a;
+      --bad-bg: #fde7e4;
+      --warn: #a86a12;
+      --warn-bg: #fff3d4;
+      --blue: #2563eb;
+      --blue-bg: #eaf1ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+      font-size: 20px;          /* 5학년이 읽기 쉬운 큰 글씨 */
+      line-height: 1.55;
+    }
+    main { max-width: 720px; margin: 0 auto; padding: 16px 16px 40px; }
+
+    h1 { font-size: 30px; text-align: center; margin: 10px 0 2px; }
+    .subtitle { text-align: center; color: var(--muted); margin: 0 0 14px; font-size: 18px; }
+
+    /* ===== 모델 상태 표시 줄 ===== */
+    .status {
+      border-radius: 14px; padding: 12px 16px; font-weight: 700;
+      text-align: center; margin-bottom: 12px;
+    }
+    .status.loading { background: var(--blue-bg); color: var(--blue); }
+    .status.ready   { background: var(--ok-bg);   color: var(--ok); }
+    .status.error   { background: var(--bad-bg);  color: var(--bad); text-align: left; font-weight: 600; }
+
+    /* ===== AI가 하는 일 안내 상자 ===== */
+    .notice {
+      background: var(--blue-bg); border: 2px solid #c6d6fb; border-radius: 16px;
+      padding: 12px 16px; font-size: 18px;
+    }
+    .notice strong { color: var(--blue); }
+    .notice ul { margin: 6px 0 0; padding-left: 22px; }
+
+    /* ===== 큰 버튼 ===== */
+    .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 16px 0; }
+    .big-btn {
+      font: inherit; font-size: 24px; font-weight: 800;
+      min-height: 84px; padding: 14px 10px;
+      border: none; border-radius: 18px; cursor: pointer;
+      color: #fff; background: var(--ok);
+      box-shadow: 0 4px 0 rgba(0,0,0,.15);
+    }
+    .big-btn.blue { background: var(--blue); }
+    .big-btn.gray { background: #6b7a72; }
+    .big-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 rgba(0,0,0,.15); }
+    .big-btn:disabled { background: #aab6af; cursor: not-allowed; box-shadow: none; }
+
+    /* ===== 카메라 화면 ===== */
+    .camera-box {
+      display: none; background: #000; border-radius: 18px; overflow: hidden;
+      margin-bottom: 16px;
+    }
+    .camera-box.show { display: block; }
+    .camera-box video { width: 100%; display: block; max-height: 60vh; object-fit: contain; background: #000; }
+    .camera-controls { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; padding: 10px; background: #111; }
+    .camera-controls .big-btn { font-size: 20px; min-height: 64px; }
+
+    /* ===== 사진 미리보기 + 결과 ===== */
+    .card {
+      background: var(--card); border: 2px solid var(--line); border-radius: 20px;
+      padding: 16px; margin-bottom: 16px;
+    }
+    .hidden { display: none !important; }
+    #preview {
+      width: 100%; max-height: 360px; object-fit: contain;
+      border-radius: 12px; background: #eef2ef; display: block;
+    }
+    .result-msg {
+      font-size: 30px; font-weight: 900; text-align: center;
+      border-radius: 16px; padding: 18px 12px; margin: 14px 0 12px;
+    }
+    .result-msg.attached { background: var(--bad-bg);  color: var(--bad); }
+    .result-msg.removed  { background: var(--ok-bg);   color: var(--ok); }
+    .result-msg.unsure   { background: var(--warn-bg); color: var(--warn); font-size: 24px; }
+    .result-msg.thinking { background: var(--blue-bg); color: var(--blue); font-size: 24px; }
+    .result-msg.error    { background: var(--bad-bg);  color: var(--bad); font-size: 22px; }
+
+    /* 확률 막대 */
+    .prob { margin: 10px 0; }
+    .prob-top { display: flex; justify-content: space-between; font-size: 18px; font-weight: 700; }
+    .bar { height: 22px; background: #e7ece9; border-radius: 11px; overflow: hidden; }
+    .fill { height: 100%; width: 0%; transition: width .5s; }
+    .fill.red { background: var(--bad); }
+    .fill.green { background: var(--ok); }
+    .small { font-size: 16px; color: var(--muted); }
+
+    /* ===== 비·헹·분·섞 규칙 카드 ===== */
+    h2 { font-size: 24px; margin: 22px 0 10px; text-align: center; }
+    .rules { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .rule {
+      position: relative; background: var(--card); border: 3px solid var(--line);
+      border-radius: 18px; padding: 14px 12px; text-align: center; transition: all .3s;
+    }
+    .rule .icon { font-size: 40px; line-height: 1.2; }
+    .rule .name { font-size: 24px; font-weight: 900; }
+    .rule .desc { font-size: 17px; color: var(--muted); }
+    .rule .badge {
+      display: none; margin-top: 8px; font-size: 16px; font-weight: 800;
+      border-radius: 999px; padding: 4px 10px;
+    }
+    /* 결과에 따라 '분리하기' 카드를 강조하는 모양 */
+    .rule.hl-red    { border-color: var(--bad);  background: var(--bad-bg);  transform: scale(1.04); box-shadow: 0 0 0 4px rgba(214,57,42,.18); }
+    .rule.hl-green  { border-color: var(--ok);   background: var(--ok-bg);   transform: scale(1.04); box-shadow: 0 0 0 4px rgba(24,145,81,.18); }
+    .rule.hl-yellow { border-color: var(--warn); background: var(--warn-bg); transform: scale(1.04); }
+    .rule.hl-red .badge, .rule.hl-green .badge, .rule.hl-yellow .badge { display: inline-block; }
+    .rule.hl-red .badge    { background: var(--bad);  color: #fff; }
+    .rule.hl-green .badge  { background: var(--ok);   color: #fff; }
+    .rule.hl-yellow .badge { background: var(--warn); color: #fff; }
+    .ai-tag {
+      position: absolute; top: 8px; right: 8px; font-size: 13px; font-weight: 800;
+      background: var(--blue); color: #fff; border-radius: 8px; padding: 2px 6px;
+    }
+
+    footer { margin-top: 24px; font-size: 15px; color: var(--muted); text-align: center; }
+
+    /* 화면이 아주 좁은 휴대폰에서는 버튼을 한 줄에 하나씩 */
+    @media (max-width: 420px) {
+      body { font-size: 18px; }
+      h1 { font-size: 25px; }
+      .btn-row { grid-template-columns: 1fr; }
+      .camera-controls { grid-template-columns: 1fr 1fr; }
+      .camera-controls #snapBtn { grid-column: 1 / -1; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>♻️ 비·헹·분·섞!</h1>
+  <p class="subtitle">분리배출 감독 AI · PET병 라벨 검사</p>
+
+  <!-- 모델 상태 (불러오는 중 / 준비 완료 / 오류) -->
+  <div id="status" class="status loading">🔄 AI 모델을 불러오는 중이에요...</div>
+
+  <!-- AI가 무엇을 판정하는지 분명하게 알려 주는 안내 -->
+  <div class="notice">
+    🤖 <strong>이 AI는 PET병의 ‘라벨 분리 여부’만 판정해요.</strong>
+    <ul>
+      <li>비우기·헹구기·섞지 않기는 AI가 검사하지 않아요. 스스로 확인해요!</li>
+      <li>PET병이 아닌 물건이나 라벨이 잘 안 보이는 사진은 정확히 판정하지 못할 수 있어요.</li>
+      <li>병 하나만, 밝은 곳에서, 병 전체가 보이게 찍어 주세요.</li>
+    </ul>
+  </div>
+
+  <!-- 큰 버튼 두 개: 카메라 / 사진 올리기 (모델이 준비되기 전에는 눌리지 않음) -->
+  <div class="btn-row">
+    <button id="cameraBtn" class="big-btn" disabled>📷 카메라로 찍기</button>
+    <button id="uploadBtn" class="big-btn blue" disabled>🖼️ 사진 올리기</button>
+  </div>
+
+  <!-- 숨겨진 파일 선택 상자들 (버튼을 누르면 대신 열림) -->
+  <input type="file" id="fileInput" accept="image/*" hidden>
+  <!-- 실시간 카메라를 못 쓰는 기기용: 휴대폰 기본 카메라 앱으로 바로 촬영 -->
+  <input type="file" id="captureInput" accept="image/*" capture="environment" hidden>
+
+  <!-- 실시간 카메라 화면 -->
+  <div id="cameraBox" class="camera-box">
+    <video id="video" autoplay playsinline muted></video>
+    <div class="camera-controls">
+      <button id="snapBtn" class="big-btn">📸 찰칵!</button>
+      <button id="switchBtn" class="big-btn blue">🔄 전환</button>
+      <button id="closeCamBtn" class="big-btn gray">✖ 닫기</button>
+    </div>
+  </div>
+
+  <!-- 찍은 사진과 AI 판정 결과 -->
+  <section id="resultCard" class="card hidden" aria-live="polite">
+    <img id="preview" alt="검사할 PET병 사진">
+    <div id="resultMsg" class="result-msg thinking">🤔 AI가 살펴보는 중...</div>
+
+    <div id="probArea" class="hidden">
+      <div class="prob">
+        <div class="prob-top"><span>🏷️ 라벨이 붙어 있음</span><span id="pAttachedTxt">0%</span></div>
+        <div class="bar"><div id="pAttachedBar" class="fill red"></div></div>
+      </div>
+      <div class="prob">
+        <div class="prob-top"><span>✨ 라벨을 제거함</span><span id="pRemovedTxt">0%</span></div>
+        <div class="bar"><div id="pRemovedBar" class="fill green"></div></div>
+      </div>
+      <p class="small">AI는 70% 이상 확실할 때만 판정해요. 그보다 낮으면 “잘 모르겠어요”라고 답해요.</p>
+    </div>
+
+    <div class="btn-row" style="grid-template-columns:1fr; margin-bottom:0;">
+      <button id="againBtn" class="big-btn gray">🔁 다른 병 검사하기</button>
+    </div>
+  </section>
+
+  <!-- 비·헹·분·섞 네 가지 규칙 -->
+  <h2>PET병 분리배출 4가지 규칙</h2>
+  <div class="rules">
+    <div class="rule" id="rule-empty">
+      <div class="icon">🫗</div>
+      <div class="name">비우기</div>
+      <div class="desc">병 안의 음료와 내용물을 다 비워요.</div>
+    </div>
+    <div class="rule" id="rule-rinse">
+      <div class="icon">🚿</div>
+      <div class="name">헹구기</div>
+      <div class="desc">물로 깨끗이 헹궈 냄새와 찌꺼기를 없애요.</div>
+    </div>
+    <div class="rule" id="rule-separate">
+      <span class="ai-tag">AI 검사</span>
+      <div class="icon">✂️</div>
+      <div class="name">분리하기</div>
+      <div class="desc">비닐 라벨처럼 다른 재질은 떼어 내요.</div>
+      <div class="badge" id="separateBadge"></div>
+    </div>
+    <div class="rule" id="rule-nomix">
+      <div class="icon">🚫</div>
+      <div class="name">섞지 않기</div>
+      <div class="desc">종류별로 나누어, 다른 쓰레기와 섞지 않고 버려요.</div>
+    </div>
+  </div>
+
+  <footer>
+    🔒 사진은 이 기기 안에서만 검사하고, 어디에도 보내거나 저장하지 않아요.
+  </footer>
+</main>
+
+<script>
+/* =============================================================
+   1. 기본 설정값
+   - 모델 파일은 이 HTML과 같은 폴더에 있어야 해요.
+     (model.json, metadata.json, weights.bin)
+   - weights.bin은 model.json이 알아서 불러오기 때문에 따로 적지 않아요.
+   ============================================================= */
+const MODEL_URL = "./model.json";
+const METADATA_URL = "./metadata.json";
+
+// 티처블 머신에서 정한 클래스 이름 (글자가 정확히 같아야 해요)
+const CLASS_REMOVED = "PET_Label_Removed";   // 라벨이 제거된 PET병
+const CLASS_ATTACHED = "PET_Label_Attached"; // 라벨이 붙어 있는 PET병
+
+// 가장 높은 확률이 이 값보다 낮으면 "잘 모르겠어요"라고 답해요.
+const THRESHOLD = 0.7;
+
+/* =============================================================
+   2. 상태를 기억하는 변수들
+   ============================================================= */
+let model = null;          // 불러온 AI 모델
+let modelReady = false;    // 모델이 완전히 준비되었는지 (true일 때만 예측)
+let stream = null;         // 켜져 있는 카메라
+let facingMode = "environment"; // 카메라 방향 (environment=뒷면, user=앞면)
+let busy = false;          // 예측 중에는 버튼을 또 누르지 못하게 막기
+
+/* =============================================================
+   3. 화면 요소 가져오기
+   ============================================================= */
+const $ = (id) => document.getElementById(id);
+const statusEl = $("status");
+const cameraBtn = $("cameraBtn");
+const uploadBtn = $("uploadBtn");
+const fileInput = $("fileInput");
+const captureInput = $("captureInput");
+const cameraBox = $("cameraBox");
+const video = $("video");
+const resultCard = $("resultCard");
+const preview = $("preview");
+const resultMsg = $("resultMsg");
+const probArea = $("probArea");
+const ruleSeparate = $("rule-separate");
+const separateBadge = $("separateBadge");
+
+/* 상태 줄에 글자를 보여 주는 함수 */
+function setStatus(type, html) {
+  statusEl.className = "status " + type;
+  statusEl.innerHTML = html;
+}
+
+/* =============================================================
+   4. AI 모델 불러오기
+   - 모델이 '완전히' 준비된 뒤에만 버튼을 켜요.
+   ============================================================= */
+async function loadModel() {
+  setStatus("loading", "🔄 AI 모델을 불러오는 중이에요...");
+  try {
+    // (1) 라이브러리(CDN)를 못 불러온 경우: 인터넷 연결 문제
+    if (typeof tmImage === "undefined" || typeof tf === "undefined") {
+      throw new Error("LIBRARY");
+    }
+    // (2) 파일을 더블클릭해서 연 경우(file://)에는 보안 때문에 모델을 못 읽어요.
+    if (location.protocol === "file:") {
+      throw new Error("FILE_PROTOCOL");
+    }
+
+    // (3) 모델 불러오기 (model.json → weights.bin 자동 로드)
+    model = await tmImage.load(MODEL_URL, METADATA_URL);
+
+    // (4) 클래스 이름이 우리가 정한 것과 같은지 확인
+    const labels = model.getClassLabels();
+    if (!labels.includes(CLASS_REMOVED) || !labels.includes(CLASS_ATTACHED)) {
+      throw new Error("LABEL:" + labels.join(", "));
+    }
+
+    // (5) 준비 운동: 빈 그림으로 한 번 예측해 두면 첫 검사가 빨라져요.
+    const warm = document.createElement("canvas");
+    warm.width = warm.height = 224;
+    await model.predict(warm);
+
+    // (6) 이제 진짜 준비 완료!
+    modelReady = true;
+    cameraBtn.disabled = false;
+    uploadBtn.disabled = false;
+    setStatus("ready", "✅ AI 준비 완료! PET병 사진을 찍거나 올려 주세요.");
+  } catch (err) {
+    console.error(err);
+    modelReady = false;
+    let msg = "❌ AI 모델을 불러오지 못했어요. 선생님께 알려 주세요.<br><span class='small'>";
+    if (err.message === "LIBRARY") {
+      msg += "인터넷 연결을 확인한 뒤 새로고침해 주세요.";
+    } else if (err.message === "FILE_PROTOCOL") {
+      msg += "파일을 더블클릭해서 열면 작동하지 않아요. GitHub Pages 주소나 로컬 서버(예: VS Code Live Server)로 열어 주세요.";
+    } else if (err.message.startsWith("LABEL:")) {
+      msg += "모델의 클래스 이름이 달라요. 현재 이름: " + err.message.slice(6) +
+             " / 필요한 이름: " + CLASS_REMOVED + ", " + CLASS_ATTACHED;
+    } else {
+      msg += "model.json, metadata.json, weights.bin이 index.html과 같은 폴더에 있는지 확인해 주세요.";
+    }
+    setStatus("error", msg + "</span>");
+  }
+}
+
+/* =============================================================
+   5. 그림 준비 도우미 함수
+   ============================================================= */
+
+// 파일(사진)을 <img>로 읽어 오는 함수. 사진은 기기 안에서만 열려요.
+function loadImageFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file); // 기기 안에서만 쓰는 임시 주소
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("IMAGE")); };
+    img.src = url;
+  });
+}
+
+// 그림(사진/카메라 화면)을 알맞은 크기의 캔버스로 옮기는 함수
+// - 너무 큰 휴대폰 사진은 줄여서 빠르고 가볍게 검사해요.
+// - eval.html도 똑같은 방법을 써서 결과가 일치하게 했어요.
+function toCanvas(source, srcW, srcH, maxSide = 800) {
+  const scale = Math.min(1, maxSide / Math.max(srcW, srcH));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(srcW * scale);
+  canvas.height = Math.round(srcH * scale);
+  canvas.getContext("2d").drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+/* =============================================================
+   6. AI로 판정하기 (이 앱의 핵심!)
+   ============================================================= */
+async function classify(canvas) {
+  // 모델이 준비되지 않았으면 절대 예측하지 않아요.
+  if (!modelReady || !model) {
+    showMessage("error", "AI가 아직 준비되지 않았어요. 잠시 후 다시 해 주세요.");
+    return;
+  }
+  busy = true;
+
+  // 사진 보여 주기
+  preview.src = canvas.toDataURL("image/jpeg", 0.9); // 화면 표시용(기기 안에서만)
+  resultCard.classList.remove("hidden");
+  probArea.classList.add("hidden");
+  showMessage("thinking", "🤔 AI가 살펴보는 중...");
+  highlightSeparate(null);
+
+  try {
+    // model.predict는 [{className, probability}, ...] 모양으로 결과를 줘요.
+    const predictions = await model.predict(canvas);
+
+    // 두 클래스의 확률을 이름으로 찾아요. (순서가 바뀌어도 안전)
+    const pRemoved = predictions.find(p => p.className === CLASS_REMOVED).probability;
+    const pAttached = predictions.find(p => p.className === CLASS_ATTACHED).probability;
+    const maxP = Math.max(pRemoved, pAttached);
+
+    // 확률 막대 그리기
+    showProbabilities(pRemoved, pAttached);
+
+    // 판정 규칙
+    if (maxP < THRESHOLD) {
+      // ① 확실하지 않을 때
+      showMessage("unsure", "🤔 잘 모르겠어요.<br>다시 촬영하거나 선생님께 확인하세요.");
+      highlightSeparate("unsure");
+    } else if (pAttached > pRemoved) {
+      // ② 라벨이 붙어 있다고 판정
+      showMessage("attached", "🏷️ 라벨을 분리하세요!");
+      highlightSeparate("attached");
+    } else {
+      // ③ 라벨을 잘 뗐다고 판정
+      showMessage("removed", "👍 라벨을 잘 분리했어요!");
+      highlightSeparate("removed");
+    }
+  } catch (err) {
+    console.error(err);
+    showMessage("error", "❌ 사진을 검사하다 문제가 생겼어요. 다른 사진으로 다시 해 주세요.");
+  } finally {
+    busy = false;
+    resultCard.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
+// 결과 문장 보여 주기
+function showMessage(type, html) {
+  resultMsg.className = "result-msg " + type;
+  resultMsg.innerHTML = html;
+}
+
+// 확률 막대와 숫자 보여 주기
+function showProbabilities(pRemoved, pAttached) {
+  probArea.classList.remove("hidden");
+  $("pRemovedTxt").textContent = Math.round(pRemoved * 100) + "%";
+  $("pAttachedTxt").textContent = Math.round(pAttached * 100) + "%";
+  $("pRemovedBar").style.width = (pRemoved * 100).toFixed(1) + "%";
+  $("pAttachedBar").style.width = (pAttached * 100).toFixed(1) + "%";
+}
+
+// 결과에 따라 '분리하기' 규칙 카드를 강조해요.
+function highlightSeparate(state) {
+  ruleSeparate.classList.remove("hl-red", "hl-green", "hl-yellow");
+  if (state === "attached") {
+    ruleSeparate.classList.add("hl-red");
+    separateBadge.textContent = "👉 지금 꼭 해야 해요!";
+  } else if (state === "removed") {
+    ruleSeparate.classList.add("hl-green");
+    separateBadge.textContent = "✔ 잘했어요!";
+  } else if (state === "unsure") {
+    ruleSeparate.classList.add("hl-yellow");
+    separateBadge.textContent = "❓ 눈으로 다시 확인해요";
+  }
+}
+
+/* =============================================================
+   7. 사진 올리기
+   ============================================================= */
+uploadBtn.addEventListener("click", () => { if (!busy) fileInput.click(); });
+fileInput.addEventListener("change", () => handleFile(fileInput));
+captureInput.addEventListener("change", () => handleFile(captureInput));
+
+async function handleFile(input) {
+  const file = input.files && input.files[0];
+  input.value = ""; // 같은 사진을 다시 골라도 작동하도록 비워 두기
+  if (!file) return;
+
+  if (!file.type.startsWith("image/")) {
+    resultCard.classList.remove("hidden");
+    probArea.classList.add("hidden");
+    preview.removeAttribute("src");
+    showMessage("error", "📁 사진 파일만 올릴 수 있어요.");
+    return;
+  }
+  try {
+    const img = await loadImageFromFile(file);
+    const canvas = toCanvas(img, img.naturalWidth, img.naturalHeight);
+    await classify(canvas);
+  } catch (err) {
+    resultCard.classList.remove("hidden");
+    probArea.classList.add("hidden");
+    preview.removeAttribute("src");
+    showMessage("error", "❌ 이 사진은 열 수 없어요.<br>JPG나 PNG 사진으로 다시 해 주세요.");
+  }
+}
+
+/* =============================================================
+   8. 카메라로 찍기
+   - 실시간 카메라를 쓸 수 있으면 화면에 카메라를 켜요.
+   - 안 되면 휴대폰의 기본 카메라 앱을 열어요.
+   ※ 카메라 영상은 이 화면에서만 보이고 전송되지 않아요.
+   ============================================================= */
+cameraBtn.addEventListener("click", async () => {
+  if (busy) return;
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    await startCamera();
+  } else {
+    captureInput.click(); // 대신 기본 카메라 앱 사용
+  }
+});
+
+async function startCamera() {
+  stopCamera();
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false
+    });
+    video.srcObject = stream;
+    cameraBox.classList.add("show");
+    cameraBox.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (err) {
+    console.error(err);
+    // 카메라 권한을 거절했거나 카메라가 없을 때
+    alert("카메라를 켤 수 없어요.\n카메라 사용을 '허용'했는지 확인해 주세요.\n대신 사진 촬영 화면을 열게요.");
+    captureInput.click();
+  }
+}
+
+function stopCamera() {
+  if (stream) {
+    stream.getTracks().forEach(t => t.stop()); // 카메라 끄기
+    stream = null;
+  }
+  video.srcObject = null;
+  cameraBox.classList.remove("show");
+}
+
+// 찰칵! 지금 카메라 화면을 사진으로 만들어 검사
+$("snapBtn").addEventListener("click", async () => {
+  if (busy || !stream || !video.videoWidth) return;
+  const canvas = toCanvas(video, video.videoWidth, video.videoHeight);
+  stopCamera();
+  await classify(canvas);
+});
+
+// 앞/뒤 카메라 바꾸기
+$("switchBtn").addEventListener("click", () => {
+  facingMode = facingMode === "environment" ? "user" : "environment";
+  startCamera();
+});
+
+$("closeCamBtn").addEventListener("click", stopCamera);
+
+// 다른 병 검사하기: 결과 지우고 맨 위로
+$("againBtn").addEventListener("click", () => {
+  resultCard.classList.add("hidden");
+  highlightSeparate(null);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+});
+
+// 다른 탭으로 가거나 페이지를 닫으면 카메라를 꺼요.
+document.addEventListener("visibilitychange", () => { if (document.hidden) stopCamera(); });
+window.addEventListener("pagehide", stopCamera);
+
+/* =============================================================
+   9. 시작! 페이지가 열리면 모델부터 불러와요.
+   ============================================================= */
+loadModel();
+</script>
+</body>
+</html>
